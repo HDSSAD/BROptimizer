@@ -2,7 +2,7 @@
 
 :: ────────────────────────────────────────────────
 :: Configuración (ajusta estas líneas si cambias paths)
-set "NW_EXE=%userprofile%\.NW.js\nw.exe"
+for /f "delims=" %%i in ('where nw.exe') do set "NW_PATH=%%i"
 set "PROFILE_DIR=%localappdata%\RPGM\User Data"
 :: ────────────────────────────────────────────────
 
@@ -24,16 +24,16 @@ if exist "%PROFILE_DIR%" (
 )
 
 :: 2. Lanzar el juego usando el mismo perfil limpio
-if not exist "%NW_EXE%" (
-    echo ERROR: No se encuentra nw.exe en
-    echo    %NW_EXE%
+if not exist %NW_PATH% (
+    echo ERROR: No se encuentra nw.exe en Path
+    echo    %NW_PATH%
     echo Instala/actualiza NW.js portable en esa ubicación.
     pause
     exit /b 1
 )
 
 echo Iniciando juego...
-start "" "%NW_EXE%" --user-data-dir="%PROFILE_DIR%" --nwapp "%CD%"
+start "" "%NW_PATH%" --user-data-dir="%PROFILE_DIR%" --nwapp "%CD%"
 
 endlocal
 exit /b 0

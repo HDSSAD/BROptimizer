@@ -44,6 +44,12 @@ def file_log(project_folder:Path, category:str, file_path:Path):
     with open(f"{current_log_path/category}.log", "a") as f:
         f.write(f"{file_path}\n")
 
+def get_nwjs_path() -> Path:
+    nwjs_Path = Path(os.getenv("nw"))
+    if nwjs_Path.exists():
+        return nwjs_Path
+    return Path()
+
 def cwebp_available():
     """ Devuelve True si existe cwebp en las variables de entorno del sistema """
     if shutil.which("cwebp"):
@@ -264,12 +270,12 @@ def setup_nwjs_game_launcher(project_folder: Path):
      - Modifica el archivo de configuración json del juego para usar la carpeta creada anteriormente como perfil.
 
      - Instala el archivo .bat del launcher personalizado dentro de la caerpeta del juego """
-    local_appdata = os.getenv("LOCALAPPDATA")
+    local_appdata = get_appdata()
     if local_appdata == None:
         print("Selecciona la carpeta Local que está dentro de AppData")
         print("Usualmente en: C:/Users/(tu usuario)/AppData/Local")
         local_appdata = select_folder("Local AppData")
-        if local_appdata == Path():
+        if local_appdata == Path() or local_appdata.name != "Local":
             return
         elif local_appdata.parent.name != "AppData" and not (local_appdata.parent/"LocalLow").exists() and not (local_appdata.parent/"Roaming").exists():
             return
@@ -423,7 +429,7 @@ def process_audio(project_folder:Path) -> list[tuple[Path, Path, int]]:
             )
     return list_source_output_hz
 
-def compress_image(cwebp_flags:list[str], source_output_pair:tuple[Path,Path]):
+def compress_image(project_folder:Path, cwebp_flags:list[str], source_output_pair:tuple[Path,Path]):
     source, output = source_output_pair
     command_cwebp = cwebp_flags.copy()
     command_cwebp.append(f"{source}")
@@ -431,7 +437,7 @@ def compress_image(cwebp_flags:list[str], source_output_pair:tuple[Path,Path]):
     command_cwebp.append(f"{output}")
     if len(command_cwebp) > 0 and source.exists():
         try:
-            print(f"Procesando: {output}")
+            print(f"Procesando: {source.relative_to(project_folder)}")
             subprocess.run(command_cwebp)
         except Exception as e:
             log_exception(e, "compress_image", "subprocess error", output)
@@ -445,7 +451,7 @@ def process_images(project_folder:Path, cwebp_flags:list[str]):
     if len(list_source_output) > 0:
         with ThreadPoolExecutor(max_threads) as executor:
             executor.map(
-                partial(compress_image, cwebp_flags),    # Función compress_image con argumento adicional cwebp_flags
+                partial(compress_image, project_folder, cwebp_flags),    # Función compress_image con argumento adicional cwebp_flags
                 list_source_output                       # Iterable para executor
             )
     return list_source_output
@@ -470,6 +476,10 @@ def replace_file(project_folder:Path, original_file:Path, compressed_file:Path, 
         if 0 < compressed_file_size < original_file_size:
             try:
                 shutil.move(compressed_file, original_file.with_suffix(compressed_file.suffix))
+                try:
+                    original_file.unlink()
+                except:
+                    log_exception(e, "repalce_originals", "file unlink error", compressed_file)
                 cumulative_size_saved += original_file_size - compressed_file_size
                 print(f"Reemplazando {original_file.relative_to(project_folder)}")
                 file_log(project_folder, "Original_replaced", compressed_file)
