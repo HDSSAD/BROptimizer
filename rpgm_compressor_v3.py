@@ -74,6 +74,12 @@ def select_file(project_folder:Path, file_name:str, extension:str) -> Path|None:
         return None
     return Path(selected_file)
 
+def video_processing_allowed(project_folder:Path|None) -> bool:
+    """ Devuelve True si se cumplen los requisitos para que el programa ejecute las tareas relacionadas a video """
+    if ffprobe_available() and ffmpeg_available() and project_folder != None:
+        return True
+    else:
+        return False
     
 def audio_processing_allowed(project_folder:Path|None) -> bool:
     """ Devuelve True si se cumplen los requisitos para que el programa ejecute las tareas relacionadas a audio """
@@ -141,6 +147,10 @@ def get_default_image_profile_name() -> str:
 def get_default_cwebp_flags() -> list[str]:
     """ Devuelve los flags de cwebp que corresponden al perfil por defecto para la compresión de imágenes """
     return ["cwebp", "-q", "80", "-alpha_q", "100", "-exact", "-f", "30", "-af", "-quiet"]
+
+def get_video_extensions() -> tuple[str,...]:
+    """ Devuelve una tupla que contiene las extensiónes de archivos de video que el propgrama procesasará """
+    return (".mp4", ".webm", ".avi", ".mkv", ".mov")
 
 def get_audio_extensions() -> tuple[str,...]:
     """ Devuelve una tupla que contiene las extensiónes de archivos de audio que el propgrama procesasará """
@@ -325,39 +335,21 @@ def get_audio_hz(project_folder:Path, file: Path) -> int:
     # end try
     return hz
 
-def compress_file(project_folder:Path, cwebp_flags:list[str], source:Path):
+def compress_image(project_folder:Path, cwebp_flags:list[str], source:Path):
+    # Output será un webp disfrazado de png (u otra extensión del archivo original)
+    # para facilitar la aceptación del archivo por parte del motor de RPG Maker y sus scripts
+    # Para evitar esto y hacerlo de forma "limpia" habría que entrar a cada script del proyecto y
+    # buscar las extensiones originales en el texto, extraer la ruta de la imagen a la que hacen referencia, 
+    # y si existe con extensión webp entonces editar el archivo del script para que apunte 
+    # al archivo con extensión webp en vez del anterior archivo con extensión png
+    # Pero esto podría demorar más en procesar y mantener la extensión original es mucho más rápido
     if source.exists():
         rel_source = source.relative_to(project_folder)
         output = get_compressed_folder()/rel_source
-        command:list[str] = []
-        if source.suffix in get_image_extensions():
-            # Output será un webp disfrazado de png (u otra extensión del archivo original)
-            # para facilitar la aceptación del archivo por parte del motor de RPG Maker y sus scripts
-            # Para evitar esto y hacerlo de forma "limpia" habría que entrar a cada script del proyecto y
-            # buscar las extensiones originales en el texto, extraer la ruta de la imagen a la que hacen referencia, 
-            # y si existe con extensión webp entonces editar el archivo del script para que apunte 
-            # al archivo con extensión webp en vez del anterior archivo con extensión png
-            # Pero esto podría demorar más en procesar y mantener la extensión original es mucho más rápido
-            command = cwebp_flags.copy()
-            command.append(f"{source}")
-            command.append("-o")
-            command.append(f"{output}")
-
-        elif source.suffix in get_audio_extensions():
-            output = output.with_suffix(".ogg")
-            hz = get_audio_hz(project_folder, source)
-            if 22050 <= hz < 32000:
-                hz = 22050
-            else:
-                hz = 32000
-            command = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error",
-                    "-i", f"{source}",
-                    "-c:a", "libvorbis", 
-                    "-ar", f"{hz}", 
-                    "-q:a", "0", 
-                    "-y", f"{output}"
-                ]
+        command:list[str] = cwebp_flags.copy()
+        command.append(f"{source}")
+        command.append("-o")
+        command.append(f"{output}")
         if len(command) > 0:
             try:
                 print(f"Procesando: {source.relative_to(project_folder)}")
@@ -380,7 +372,171 @@ def compress_file(project_folder:Path, cwebp_flags:list[str], source:Path):
                     except Exception as e:
                         # TODO
                         print("ERROR")
-# END of function compress_file()
+# END of function compress_image()
+
+def compress_audio(project_folder:Path, source:Path):
+    if source.exists():
+        rel_source = source.relative_to(project_folder)
+        output = get_compressed_folder()/rel_source
+        output = output.with_suffix(".ogg")
+        hz = get_audio_hz(project_folder, source)
+        if 22050 <= hz < 32000:
+            hz = 22050
+        else:
+            hz = 32000
+        command:list[str] = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-i", f"{source}",
+                "-c:a", "libvorbis", 
+                "-ar", f"{hz}", 
+                "-q:a", "0", 
+                "-y", f"{output}"
+            ]
+        if len(command) > 0:
+            try:
+                print(f"Procesando: {source.relative_to(project_folder)}")
+                subprocess.run(command)
+            except Exception as e:
+                # TODO
+                print("ERROR")
+
+            if output.exists() and source.exists():
+                if output.stat().st_size < source.stat().st_size:
+                    try:
+                        source.unlink()
+                        shutil.move(output, source.parent)
+                    except Exception as e:
+                        # TODO
+                        print("ERROR")
+                else:
+                    try:
+                        output.unlink()
+                    except Exception as e:
+                        # TODO
+                        print("ERROR")
+# END of function compress_audio()
+
+def compress_video(project_folder:Path, quality:int, plus:int|float = 1.15, source:Path):
+    if source.exists():
+        rel_source = source.relative_to(project_folder)
+        output = get_compressed_folder()/rel_source
+
+        width, height = get_video_resolution(source)
+        if width == 0 and height == 0:
+            return False
+        target_res = min(width, height, quality)
+
+        if width > height:
+            vf_scale = f"-2:{target_res}"
+        else:
+            vf_scale = f"{target_res}:-2"
+
+        auto_video_kbps = optimal_kbps_for_resolution(target_res, plus)
+        original_video_kbps = get_video_kbps(source)
+        original_optimal_kbps = optimal_kbps_for_resolution(min(width, height), plus)
+        if 0 < original_video_kbps < original_optimal_kbps:
+            quality_diff = (original_video_kbps * 100 / original_optimal_kbps)
+            video_bitrate = int(auto_video_kbps * quality_diff / 100)
+        else:
+            video_bitrate = auto_video_kbps
+
+        audio_bitrate = "48"
+        audio_codec = "libopus"
+        extra = ["-pix_fmt", "yuv420p", "-ar", "48000", "-tune", "animation"]
+        video_codec = "libx264"
+
+        passlog = "ffmpeg_pass_temp"
+        null = "NUL" if os.name == "nt" else "/dev/null"
+
+        cmd1:list[str] = [
+            "ffmpeg", "-i", str(source),
+            "-vf", f"scale={vf_scale}",
+            "-c:v", video_codec,
+            "-preset", "medium",
+            *extra,
+            "-b:v", f"{video_bitrate}k",
+            "-pass", "1",
+            "-passlogfile", passlog,
+            "-an", "-f", "null", null
+        ]
+        try:
+            subprocess.run(cmd1, check=True)
+        except subprocess.CalledProcessError as e:
+            print("Falló Pass 1", e)
+            return False
+        # end try
+
+        # Pass 2
+        cmd2:list[str] = [
+            "ffmpeg", "-i", str(source),
+            "-vf", f"scale={vf_scale}",
+            "-c:v", video_codec,
+            "-preset", "medium",
+            *extra,
+            "-b:v", f"{video_bitrate}k",
+            "-pass", "2",
+            "-passlogfile", passlog,
+            "-c:a", audio_codec,
+            "-b:a", f"{audio_bitrate}k",
+            "-y", str(output)
+        ]
+        try:
+            subprocess.run(cmd2, check=True)
+        except subprocess.CalledProcessError as e:
+            print("Falló Pass 2", e)
+            return False
+        # end try
+
+        # Limpieza
+        for passlog_file in [f"{passlog}-0.log", f"{passlog}-0.log.mbtree"]:
+            passlog_file = Path(passlog_file)
+            if passlog_file.is_file():
+                passlog_file.unlink()
+        return True
+# END of function compress_video()
+
+def get_video_kbps(video_path:Path) -> int:
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=bit_rate",
+        "-of", "csv=s=x:p=0", str(video_path)
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+        result = int(result.stdout.strip())
+        return int(result/1000)
+        
+    except subprocess.CalledProcessError as e:
+        print("Error al obtener el bit rate", e)
+    except Exception as e:
+        print("Ocurrió un error inesperado - get_video_bitrate()", e)
+    return 0
+
+def optimal_kbps_for_resolution(quality:int, plus:float|int = 1.15) -> int:
+    return int(((quality ** 2 / 180)  - (15/4) * quality + 1020)*plus)
+
+def get_video_resolution(video_path:Path) -> tuple[int, int]:
+    """
+    Obtiene la resolución de un video usando ffprobe.
+    Retorna ancho y alto si se completó con éxito, None si algo falló.
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=s=x:p=0", str(video_path)
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        width, height = result.stdout.strip().split("x")
+        return int(width), int(height)
+    except subprocess.CalledProcessError as e:
+        print("Error al obtener resolución", e.stdout)
+        return 0,0
+    except Exception as e:
+        print("Ocurrió un error inesperado - get_video_resolution()", e)
+        return 0,0
 
 def get_source_list(project_folder:Path, extensions:tuple[str,...]) -> list[Path]:
     source_file_list:list[Path] = []
@@ -398,19 +554,49 @@ def create_output_path(project_folder:Path, source_file_list:list[Path]):
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-def process_files(project_folder:Path, extensions:tuple[str,...], cwebp_flags:list[str]):
-    print("=== Preparando archivos ===")
+def process_images(project_folder:Path, extensions:tuple[str,...], cwebp_flags:list[str]):
+    print("=== Preparando archivos de imágenes ===")
     max_threads = get_cpu_threads()
     source_list = get_source_list(project_folder, extensions)
     if len(source_list) > 0:
         create_output_path(project_folder, source_list)
-        print("=== Iniciando procesamiento de archivos ===")
+        print("=== Iniciando procesamiento de imágenes ===")
         with ThreadPoolExecutor(max_threads) as executor:
             executor.map(
-                partial(compress_file, project_folder, cwebp_flags),
+                partial(compress_image, project_folder, cwebp_flags),
                 source_list
                 )
-# END of function process_files()
+# END of function process_images()
+
+def process_audios(project_folder:Path, extensions:tuple[str,...]):
+    print("=== Preparando archivos de audio ===")
+    max_threads = get_cpu_threads()
+    source_list = get_source_list(project_folder, extensions)
+    if len(source_list) > 0:
+        create_output_path(project_folder, source_list)
+        print("=== Iniciando procesamiento de audios ===")
+        with ThreadPoolExecutor(max_threads) as executor:
+            executor.map(
+                partial(compress_audio, project_folder),
+                source_list
+                )
+# END of function process_audios()
+
+def process_videos(project_folder:Path, extensions:tuple[str,...], quality:int = 600, plus:int|float = 1.15):
+    print("=== Preparando archivos de videos ===")
+    # Limitación a 1 hilo debido a que el procesamiento de videos es más pesado
+    # Se mantiene el formato del código para actualizarlo en el futuro
+    max_threads = 1 
+    source_list = get_source_list(project_folder, extensions)
+    if len(source_list) > 0:
+        create_output_path(project_folder, source_list)
+        print("=== Iniciando procesamiento de videos ===")
+        with ThreadPoolExecutor(max_threads) as executor:
+            executor.map(
+                partial(compress_video, project_folder, quality, plus),
+                source_list
+                )
+# END of function process_videos()
             
 def subfolder_of(folder:Path, parent:Path) -> bool:
     if str(parent) in str(folder):
@@ -494,9 +680,9 @@ def get_rpgm_encryption_key(project_folder:Path) -> str|None:
 
 def compare_project_size(original_size:float, new_size:float):
     # Mostrar espacio en disco ahorrado
-    print(f"Tamaño de archivos de medios originales: {original_size}MB")
-    print(f"Tamaño de archivos de medios comprimidos: {round(original_size-new_size, ndigits=2)}MB")
-    print(f"Al reemplazar los originales se ha ahorrado en total: {new_size}MB")
+    print(f"Tamaño del proyecto originalmente: {original_size}MB")
+    print(f"Espacio Ahorrado tras la compresión: {round(original_size-new_size, ndigits=2)}MB")
+    print(f"Tamaño actual del proyecto: {new_size}MB")
 
 def menu_image_profile(image_profile_name: str, cwebp_flags: list[str]) -> tuple[str, list[str]]:
     cwebp_profiles = {  # indice del perfil : (nombre del perfil, lista de flags para cwebp)
@@ -558,18 +744,22 @@ def main_menu(project_folder:Path|None = None):
                 print(f"4 - Iniciar compresión de audio")
                 options_range.append(4)
             else: print(f"4 - [X] Compresión de audio no disponible sin ffmpeg y ffprobe")
-            if image_processing_allowed(project_folder) and audio_processing_allowed(project_folder):
-                print(f"5 - Iniciar compresión de imágenes y audio")
+            if video_processing_allowed(project_folder):
+                print(f"5 - Iniciar compresión de video")
                 options_range.append(5)
-            else: print(f"5 - [X] Compresión de imágenes y audio no disponible sin apps correspondientes")
-            if get_game_launch_file().exists() and nwjs_processing_allowed(project_folder):
-                print(f"6 - Instalar y configurar {get_game_launch_file().name}")
+            else: print(f"5 - [X] Compresión de audio no disponible sin ffmpeg y ffprobe")
+            if image_processing_allowed(project_folder) and audio_processing_allowed(project_folder):
+                print(f"6 - Iniciar compresión de imágenes y audio")
                 options_range.append(6)
-            else: print(f"6 - [X] No se puede Instalar y configurar {get_game_launch_file().name} si el archivo no existe junto a este script")
-            print(f"7 - Limpiar NW.js local del directorio del proyecto")
-            options_range.append(7)
-        print("8 - Borrar logs")
-        options_range.append(8)
+            else: print(f"6 - [X] Compresión de imágenes y audio no disponible sin apps correspondientes")
+            if get_game_launch_file().exists() and nwjs_processing_allowed(project_folder):
+                print(f"7 - Instalar y configurar {get_game_launch_file().name}")
+                options_range.append(7)
+            else: print(f"7 - [X] No se puede Instalar y configurar {get_game_launch_file().name} si el archivo no existe junto a este script")
+            print(f"8 - Limpiar NW.js local del directorio del proyecto")
+            options_range.append(8)
+        print("9 - Borrar logs")
+        options_range.append(9)
         print("0 - Salir del programa")
 
         try:
@@ -592,43 +782,51 @@ def main_menu(project_folder:Path|None = None):
                         image_profile_name, cwebp_flags = menu_image_profile(image_profile_name, cwebp_flags)
                     elif option_main == 3:
                         print("Ejecutando tarea de compresión de imágenes...")
-                        process_files(project_folder, get_image_extensions(), cwebp_flags)
+                        process_images(project_folder, get_image_extensions(), cwebp_flags)
                         update_system_json(project_folder, ["hasEncryptedImages"], False)
                         compare_project_size(initial_project_size, get_folder_size(project_folder))
                         delete_folder_content(compressed_folder)
                         project_processed = True
                         input("\nTarea Finalizada. Presiona Enter para continuar")
                     elif option_main == 4:
-                        print("Ejecutando tarea de compresión de audio...")
-                        process_files(project_folder, get_audio_extensions(), cwebp_flags)
+                        print("Ejecutando tarea de compresión de audios...")
+                        process_audios(project_folder, get_audio_extensions())
                         update_system_json(project_folder, ["hasEncryptedAudio"], False)
                         compare_project_size(initial_project_size, get_folder_size(project_folder))
                         delete_folder_content(compressed_folder)
                         project_processed = True
                         input("\nTarea Finalizada. Presiona Enter para continuar")
                     elif option_main == 5:
-                        print("Ejecutando tarea de compresión de imágenes y audio...")
-                        img_and_aud_extensions = (*get_image_extensions(), *get_audio_extensions())
-                        process_files(project_folder, img_and_aud_extensions, cwebp_flags)
-                        update_system_json(project_folder, ["hasEncryptedImages", "hasEncryptedAudio"], False)
+                        print("Ejecutando tarea de compresión de videos...")
+                        process_videos(project_folder, get_video_extensions(), 600)
                         compare_project_size(initial_project_size, get_folder_size(project_folder))
                         delete_folder_content(compressed_folder)
                         project_processed = True
                         input("\nTarea Finalizada. Presiona Enter para continuar")
                     elif option_main == 6:
+                        print("Ejecutando tarea de compresión de archivos de medios...")
+                        process_images(project_folder, get_image_extensions(), cwebp_flags)
+                        process_audios(project_folder, get_audio_extensions())
+                        process_videos(project_folder, get_video_extensions(), 600)
+                        update_system_json(project_folder, ["hasEncryptedImages", "hasEncryptedAudio"], False)
+                        compare_project_size(initial_project_size, get_folder_size(project_folder))
+                        delete_folder_content(compressed_folder)
+                        project_processed = True
+                        input("\nTarea Finalizada. Presiona Enter para continuar")
+                    elif option_main == 7:
                         print("Preparando el entorno del juego...")
                         setup_nwjs_game_launcher(project_folder)
                         print("nwjs_game_launch instalado y configurado")
                         subprocess.run(f"{project_folder/get_game_launch_file().name}", cwd=f"{project_folder}")
                         print("Juego lanzado")
-                    elif option_main == 7:
+                    elif option_main == 8:
                         print(f"Borrando archivos de NW.js locales en {project_folder.name}...")
                         delete_files_in_list(project_folder, get_nwjs_files())
                         delete_folders_in_list(project_folder, get_nwjs_folders())
                         print(f"Archivos locales de NW.js eliminados de {project_folder.name}")
                         compare_project_size(initial_project_size, get_folder_size(project_folder))
                         project_processed = True
-                elif option_main == 8:
+                elif option_main == 9:
                     print("Borrando logs...")
                     delete_folder_content(get_logs_folder())
             else:

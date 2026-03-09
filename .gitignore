@@ -2,4 +2,6 @@
 /build
 /dist
 /compressed
+media_compressor(drag&drop).py
 rpgm_compressor.spec
+video_compressor.py

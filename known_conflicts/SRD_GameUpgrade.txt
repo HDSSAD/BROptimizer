@@ -1,0 +1,22 @@
+Archivo: .\js\plugins\SRD_GameUpgrade.js
+Problema: 
+Pantalla negra al abrir el juego al intentar usar la versión global actualizada de NW.js
+Versiones actualizadas de NW.js tienen conflictos con el plugin SRD_GameUpgrade
+
+Detonantes:
+Función onload de nwjs reemplazada
+window.onload = function () {
+	if (!_.isNewNWjs && _.params['Game Reconstruction (1.5.X & below)'] && GameWindowManager.isWindowOriginal()) {
+		GameWindowManager.startGameTransition();
+	} else {
+		_.window_onload.apply(this, arguments);
+		SRD.onWindowLoad();
+	}
+};
+
+Solución:
+Editar la función para que solo ejecute el bloque else del siguiente modo:
+window.onload = function () {
+	_.window_onload.apply(this, arguments);
+	SRD.onWindowLoad();
+};
