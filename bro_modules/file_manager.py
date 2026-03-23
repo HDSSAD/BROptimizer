@@ -2,13 +2,7 @@ import shutil, os
 import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
-from bro_modules import system as bsys
 from bro_modules import logger as blog
-from bro_modules import config as bcfg
-from bro_modules import image_core
-from bro_modules import av_core
 
 def get_localappdata() -> Path|None:
     """ Devuelve un Path con la dirección de la carpeta ~/AppData/Local, y si no la encuentra devuelve un Path vacio """
@@ -126,55 +120,13 @@ def compare_project_size(original_size:float, new_size:float):
 
 def get_source_list(project_folder:Path, extensions:tuple[str,...]) -> list[Path]:
     source_file_list:list[Path] = []
-    if extensions == bcfg.get_image_extensions():
-        is_optimized = image_core.is_optimized
-    else:
-        is_optimized = av_core.is_optimized
-    with ThreadPoolExecutor(max_workers=bsys.get_cpu_threads()) as executor:
-        # La función is_optimized toma mucho tiempo en procesar. 
-        # Hasta que una versión más rapida de verificación sea encontrada...
-        # permanecerá sin uso real y retornando False por defecto de forma automática
-        futures = {executor.submit(is_optimized, root/file):root/file
-                   for root,_,files in project_folder.walk() 
-                   for file in files
-                   if file.endswith(extensions)}
-        for future in tqdm(as_completed(futures), desc="Filtrando archivos...", total=len(futures)):
-            if not future.result():
-                source_file_list.append(futures[future])
+    for root, _, files in project_folder.walk():
+        for file in files:
+            if file.endswith(extensions):
+                source_file_list.append(root/file)
     return source_file_list
 
-def compare_and_replace(original:Path, compressed:Path) -> bool:
-    """ Compara dos archivos en directorios diferentes:
-    * Si original es más pesado, lo reemplaza por compressed y marca compressed
-    * Si original es más ligero, elimina compressed y marca original
-    """
-    if compressed.exists() and original.exists():
-        if compressed.stat().st_size < original.stat().st_size:
-            try:
-                # Compressed ya está marcado como Optimizado
-                original.unlink()
-            except Exception as e:
-                # TODO
-                print("ERROR compare_and_replace compressed is smaller")
-                print("----- original.unlink", e)
-            try:
-                compressed.replace(original.with_suffix(compressed.suffix))
-            except Exception as e:
-                print("ERROR compare_and_replace compressed is smaller")
-                print("----- compressed.replace", e)
-            # end try
-        else:
-            if original.suffix.lower() in (bcfg.get_image_extensions()):
-                result = image_core.mark_as_optimized(original)
-            else:
-                result = av_core.mark_as_optimized(original)
-            if result:
-                try:
-                    compressed.unlink()
-                except Exception as e:
-                    # TODO
-                    print("ERROR compare_and_replace original is smaller",e)
-                    print("----- compressed.unlink", e)
-    return True
-# END of function compare_and_replace()
-    
+def replace_originals(to_move_list:list[tuple[Path,Path]]):
+    for file_pair in to_move_list:
+            smaller_file, source = file_pair
+            smaller_file.replace(source)
