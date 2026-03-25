@@ -255,7 +255,7 @@ def compress_audio(project_folder:Path, source:Path) -> tuple[Path, Path]|None:
     rel_source = source.relative_to(project_folder)
     output = bfm.get_compressed_folder(project_folder)/rel_source
     output = output.with_suffix(".ogg")
-    hz = get_audio_hz(project_folder, source)
+    hz = get_audio_hz(source)
     if 22050 <= hz < 32000:
         hz = 22050
     else:
@@ -280,21 +280,17 @@ def compress_audio(project_folder:Path, source:Path) -> tuple[Path, Path]|None:
         return None
 # END of function compress_audio()
 
-def get_audio_hz(project_folder:Path, file: Path) -> int:
+def get_audio_hz(file: Path) -> int:
     """ Analiza un archivo de audio con ffprobe y devuelve sus hz o 0 si hay error """
-    command_ffprobe = [
-        "ffprobe", "-v", "quiet", "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        f"{file}"
-    ]
-    try:
-        result = subprocess.run(command_ffprobe, capture_output=True, text=True)
-        hz = int(result.stdout.strip())
-    except Exception:
-        hz = 0
-    # end try
-    return hz
+    metadata = ffmpeg.probe(str(file)) # type: ignore
+    if "sample_rate" in metadata:
+        try:
+            sample_rate = metadata.get("streams")[0].get("sample_rate", "0")
+        except Exception:
+            sample_rate = "0"
+        # end try
+        return int(sample_rate)
+    return 0
 
 def optimal_video_quality(source:Path, quality:int, plus:int|float) -> tuple[int, int, str]:
     """ Recibe un video y devuelve su resolución y bitrate optimos junto con su escala
@@ -334,21 +330,15 @@ def optimal_video_quality(source:Path, quality:int, plus:int|float) -> tuple[int
 # END of function optimal_video_quality()
 
 def get_video_kbps(video_path:Path) -> int:
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=bit_rate",
-        "-of", "csv=s=x:p=0", str(video_path)
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=True, text=True)
-        result = int(result.stdout.strip())
-        return int(result/1000)
-        
-    except subprocess.CalledProcessError as e:
-        print("Error al obtener el bit rate", e)
-    except Exception as e:
-        print("Ocurrió un error inesperado - get_video_bitrate()", e)
+    metadata = ffmpeg.probe(str(file)) # type: ignore
+    if "bit_rate" in metadata:
+        try:
+            bit_rate = int(metadata.get("streams")[0].get("bit_rate", 0))
+        except Exception as e:
+            print("Ocurrió un error inesperado - get_video_bitrate()", e)
+            bit_rate = 0
+        # end try
+        return int(bit_rate/1000)
     return 0
 
 def optimal_kbps_for_resolution(quality:int, plus:float|int = 1.15) -> int:
@@ -359,19 +349,13 @@ def get_video_resolution(video_path:Path) -> tuple[int, int]:
     Obtiene la resolución de un video usando ffprobe.
     Retorna ancho y alto si se completó con éxito, None si algo falló.
     """
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=s=x:p=0", str(video_path)
-    ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        width, height = result.stdout.strip().split("x")
-        return int(width), int(height)
-    except subprocess.CalledProcessError as e:
-        print("Error al obtener resolución", e.stdout)
-        return 0,0
+        metadata = ffmpeg.probe(str(video_path)) # type: ignore
+        width = int(metadata.get("streams")[0].get("width", 0))
+        height = int(metadata.get("streams")[0].get("height", 0))
+        if width == 0 or height == 0:
+            return 0,0
+        return width, height
     except Exception as e:
         print("Ocurrió un error inesperado - get_video_resolution()", e)
         return 0,0
