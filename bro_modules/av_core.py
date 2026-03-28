@@ -50,7 +50,6 @@ def process_videos(project_folder:Path, quality:int = 600, plus:int|float = 1.15
     if to_move_list:
         print("=== Reemplazando los videos más pesados ===")
         bfm.replace_originals(to_move_list)
-        print("=== Terminado ===")
 # END of function process_videos()
 
 def process_audios(project_folder:Path):
@@ -95,7 +94,6 @@ def process_audios(project_folder:Path):
     if to_move_list:
         print("=== Reemplazando los audios más pesados ===")
         bfm.replace_originals(to_move_list)
-        print("=== Terminado ===")
 # END of function process_audios()
 
 def get_to_process_list(source_list:list[Path]) -> list[Path]:

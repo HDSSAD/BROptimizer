@@ -71,7 +71,6 @@ def process_images(project_folder:Path, cwebp_flags:list[str]):
     if to_move_list:
         print("=== Reemplazando las imágenes más pesadas ===")
         bfm.replace_originals(to_move_list)
-        print("=== Terminado ===")
 # END of function process_images()
 
 def mark_as_optimized(to_mark_list:list[Path]):
