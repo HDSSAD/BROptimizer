@@ -1,0 +1,29 @@
+requires:
+* Node.js
+* npm install --engine-strict @electron/asar
+
+asar pack . release/app.asar: Crea un archivo .asar.
+asar extract app.asar destino: Extrae el contenido del archivo.
+asar list app.asar: Lista los archivos dentro del archivo
+
+$ asar --help
+  Usage: asar [options] [command]
+  Commands:
+    pack|p <dir> <output>
+       create asar archive
+
+    list|l <archive>
+       list files of asar archive
+
+    extract-file|ef <archive> <filename>
+       extract one file from archive
+
+    extract|e <archive> <dest>
+       extract archive
+
+    integrity-digest|id <command> <app>
+       manage integrity digest in app binary (macOS only)
+
+  Options:
+    -h, --help     output usage information
+    -V, --version  output the version number
